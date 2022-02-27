@@ -17,5 +17,4 @@ FROM mcr.microsoft.com/dotnet/aspnet:6.0-alpine-amd64
 WORKDIR /app
 COPY --from=build /app ./
 
-EXPOSE 443/tcp
 ENTRYPOINT ["./Coordinator"]
