@@ -9,16 +9,16 @@ var botClient = new TelegramBotClient(BotSettingsInit.Token);
 
 using var cts = new CancellationTokenSource();
 
-// StartReceiving does not block the caller thread. Receiving is done on the ThreadPool.
+var database =
+    new Database(
+        "Server=based.c9vilnnbkwfj.eu-central-1.rds.amazonaws.com;Encrypt=false;Database=Maxi;User Id=devbase;Password=sexwithnig22;");
+
+
 var receiverOptions = new ReceiverOptions
 {
-    AllowedUpdates = { } // receive all update types
+    AllowedUpdates = new[] {UpdateType.Message}
 };
-botClient.StartReceiving(
-    HandleUpdateAsync,
-    HandleErrorAsync,
-    receiverOptions,
-    cancellationToken: cts.Token);
+botClient.StartReceiving(HandleUpdateAsync, HandleErrorAsync, receiverOptions, cts.Token);
 
 var me = await botClient.GetMeAsync();
 
@@ -41,23 +41,28 @@ async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, Cancel
 
 
         var chatId = update.Message.Chat.Id;
+        var userId = update.Message.From.Id;
+        var firstName = update.Message.From.FirstName;
+
+
         var message = update.Message;
 
-        if (message.Text == "/start")
+        switch (message.Text)
         {
-            await botClient.SendTextMessageAsync(chatId,
-                "Солдат из Беларуси и России! Это не твоя война. Ты не выбирал эту войну и агрессию. " +
-                "Мы знаем что тебя доставили на Украинскую землю силой и обманом. Мы не хотим тебя убивать." +
-                " Бросай оружие и сохрани себе жизнь!");
+            case "/start":
+                await botClient.SendTextMessageAsync(chatId,
+                    "Солдат из Беларуси и России! Это не твоя война. Ты не выбирал эту войну и агрессию. " +
+                    "Мы знаем что тебя доставили на Украинскую землю силой и обманом. Мы не хотим тебя убивать." +
+                    " Бросай оружие и сохрани себе жизнь!");
 
-            await botClient.SendTextMessageAsync(chatId,
-                "Что делать если против воли насильно попал на территорию Украины?!\n\n • Избегай участия в боевых действиях\n • Не стреляй\n • Сложи оружие и обратись к военнослужащим Украинской Армии\n • Отправь сюда фото с геолокацией\n • С поднятыми руками иди по направлению к ближайшему населенному пункту");
-            
-            
+                await botClient.SendTextMessageAsync(chatId,
+                    "Что делать если против воли насильно попал на территорию Украины?!\n\n • Избегай участия в боевых действиях\n • Не стреляй\n • Сложи оружие и обратись к военнослужащим Украинской Армии\n • Отправь сюда фото с геолокацией\n • С поднятыми руками иди по направлению к ближайшему населенному пункту");
 
-            // await botClient.SendTextMessageAsync(chatId, "https://t.me/surrender_and_survive");
-            return;
+                return;
+            case "/stop":
+                return;
         }
+
 
         if (chatId == BotSettingsInit.AdminChatId)
         {
@@ -68,18 +73,26 @@ async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, Cancel
                     cancellationToken: cancellationToken);
                 return;
             }
-                
-            if (message.ReplyToMessage.ForwardFrom is null)
+
+            var replyToMessage = message.ReplyToMessage;
+            var selectedUser = await database.SelectUserByMessage(replyToMessage.MessageId);
+
+            if (selectedUser is null)
             {
-                await botClient.SendTextMessageAsync(BotSettingsInit.AdminChatId,
-                    "Вы не можете ответить на сообщение пользователя со скрытым профилем",
+                await botClient.SendTextMessageAsync(BotSettingsInit.AdminChatId, "Ошибка действия",
                     cancellationToken: cancellationToken);
                 return;
             }
 
+            if (message.Text is null)
+            {
+                await botClient.SendTextMessageAsync(BotSettingsInit.AdminChatId,
+                    "Вы не можете отправить пустое сообщение", cancellationToken: cancellationToken);
+                return;
+            }
 
-            var replyToMessage = message.ReplyToMessage;
-            await botClient.SendTextMessageAsync(replyToMessage.ForwardFrom.Id, message.Text,
+
+            await botClient.SendTextMessageAsync(selectedUser.TelegramId, message.Text,
                 cancellationToken: cancellationToken);
         }
         else
@@ -87,8 +100,36 @@ async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, Cancel
             if (message.Chat.Type != ChatType.Private)
                 return;
 
-            await botClient.ForwardMessageAsync(BotSettingsInit.AdminChatId, chatId, message.MessageId,
-                cancellationToken: cancellationToken);
+            var selectedUser = await database.SelectUser(userId);
+
+            if (selectedUser is null)
+                await database.InsertUser(userId, firstName);
+
+
+            int sentMessageId ;
+
+
+
+            switch (message.Type)
+            {
+                case MessageType.Text:
+                    sentMessageId = (await botClient.SendTextMessageAsync(BotSettingsInit.AdminChatId, $"Отправлено: {firstName}\n\n{message.Text}", cancellationToken: cancellationToken)).MessageId;
+                    break;
+                case MessageType.Location:
+                    sentMessageId = (await botClient.SendVenueAsync(BotSettingsInit.AdminChatId,message.Location.Latitude, message.Location.Longitude,$"Отправлено: {firstName}" ,"")).MessageId;
+                    break;
+                case MessageType.Photo:
+                    sentMessageId = (await botClient.CopyMessageAsync(BotSettingsInit.AdminChatId, userId,message.MessageId,$"Отправлено: {firstName}\n\n{message.Caption}")).Id;
+                    break;
+                default:
+                    await botClient.SendTextMessageAsync(chatId, "Тип сообщения не поддерживается",
+                        cancellationToken: cancellationToken);
+                    return;
+            }
+
+            await database.InsertMessage(userId, sentMessageId);
+         
+            
             await botClient.SendTextMessageAsync(chatId, "Ваше сообщение доставлено, ожидайте ответа координатора",
                 cancellationToken: cancellationToken);
         }
